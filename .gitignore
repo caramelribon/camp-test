@@ -1,0 +1,14 @@
+# Environment variables
+.env
+.env.*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
