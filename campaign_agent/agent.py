@@ -14,7 +14,8 @@ from google.adk.events import Event
 from google.genai import types as genai_types
 from google import genai
 
-from campaign_agent.config import MODEL_ID, VALIDATOR_MODEL_ID, GOOGLE_API_KEY
+from campaign_agent.config import MODEL_ID, VALIDATOR_MODEL_ID, GOOGLE_API_KEY, MAX_RETRIES
+from campaign_agent.retry import retry_async
 from campaign_agent.db import (
     get_payment_methods,
     get_campaigns,
@@ -71,17 +72,20 @@ class CampaignPipelineAgent(BaseAgent):
     model_config = {"arbitrary_types_allowed": True}
 
     async def _call_llm(self, system_instruction: str, user_prompt: str) -> str:
-        """Call Gemini LLM directly."""
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        response = await client.aio.models.generate_content(
-            model=self.model,
-            contents=user_prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-            ),
-        )
-        return response.text
+        """Call Gemini LLM directly with retry (max 3 attempts)."""
+        async def _invoke():
+            client = genai.Client(api_key=GOOGLE_API_KEY)
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=user_prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                ),
+            )
+            return response.text
+
+        return await retry_async(_invoke)
 
     async def _classify_with_llm(self, features: dict, classification: dict) -> dict:
         """Use LLM to classify an uncertain page."""
@@ -132,17 +136,20 @@ class CampaignPipelineAgent(BaseAgent):
             }
 
     async def _call_validator_llm(self, system_instruction: str, user_prompt: str) -> str:
-        """Call Gemini LLM with the validator model."""
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        response = await client.aio.models.generate_content(
-            model=VALIDATOR_MODEL_ID,
-            contents=user_prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-            ),
-        )
-        return response.text
+        """Call Gemini LLM with the validator model with retry (max 3 attempts)."""
+        async def _invoke():
+            client = genai.Client(api_key=GOOGLE_API_KEY)
+            response = await client.aio.models.generate_content(
+                model=VALIDATOR_MODEL_ID,
+                contents=user_prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                ),
+            )
+            return response.text
+
+        return await retry_async(_invoke)
 
     async def _validate_normalized_data(self, features: dict, normalized_data: dict) -> dict:
         """Validate normalized data against original page using a separate LLM.

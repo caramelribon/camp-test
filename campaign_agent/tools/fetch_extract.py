@@ -5,6 +5,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup, Comment
 
+from campaign_agent.retry import retry_async, retry_sync
+
 logger = logging.getLogger(__name__)
 
 HEADERS = {
@@ -175,10 +177,14 @@ def fetch_and_extract(url: str) -> dict:
         dict with extracted features, or dict with 'error' key on failure.
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
+        def _fetch():
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            return resp
+
+        resp = retry_sync(_fetch)
     except requests.RequestException as e:
-        logger.error("Failed to fetch %s: %s", url, e)
+        logger.error("Failed to fetch %s after retries: %s", url, e)
         return {"url": url, "error": str(e)}
 
     return _extract_features_from_html(resp.text, url)
@@ -193,13 +199,16 @@ async def fetch_and_extract_async(url: str) -> dict:
     Returns:
         dict with extracted features, or dict with 'error' key on failure.
     """
-    # --- static attempt ---
+    # --- static attempt (with retry: max 3) ---
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        static_html = resp.text
-    except requests.RequestException as e:
-        logger.error("Failed to fetch %s: %s", url, e)
+        async def _static_fetch():
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            return resp.text
+
+        static_html = await retry_async(_static_fetch)
+    except Exception as e:
+        logger.error("Failed to fetch %s after retries: %s", url, e)
         static_html = None
 
     if static_html is not None:
@@ -213,16 +222,19 @@ async def fetch_and_extract_async(url: str) -> dict:
             url,
         )
 
-    # --- Playwright fallback ---
+    # --- Playwright fallback (with retry: max 3) ---
     try:
         from campaign_agent.tools.browser import fetch_page_html
 
-        rendered_html = await fetch_page_html(url)
+        async def _playwright_fetch():
+            return await fetch_page_html(url)
+
+        rendered_html = await retry_async(_playwright_fetch)
         features = _extract_features_from_html(rendered_html, url)
         logger.info("Extracted features from %s via Playwright", url)
         return features
     except Exception as e:
-        logger.error("Playwright fallback failed for %s: %s", url, e)
+        logger.error("Playwright fallback failed for %s after retries: %s", url, e)
         if static_html is not None:
             return _extract_features_from_html(static_html, url)
         return {"url": url, "error": str(e)}

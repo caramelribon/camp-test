@@ -2,6 +2,7 @@
 
 import logging
 from campaign_agent.db import upsert_campaign, insert_crawl_log
+from campaign_agent.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ def save_campaign_to_db(
     source_list_url: str,
     normalized_data: dict,
 ) -> dict:
-    """Save a campaign record to DB via upsert.
+    """Save a campaign record to DB via upsert (with retry: max 3).
 
     Returns:
         dict with 'campaign_id' and 'success' keys.
@@ -29,11 +30,11 @@ def save_campaign_to_db(
             "target_stores": normalized_data.get("target_stores"),
             "is_validated": normalized_data.get("is_validated"),
         }
-        campaign_id = upsert_campaign(campaign_data)
+        campaign_id = retry_sync(upsert_campaign, campaign_data)
         logger.info("Saved campaign: %s (id=%s)", detail_url, campaign_id)
         return {"campaign_id": campaign_id, "success": True}
     except Exception as e:
-        logger.error("Failed to save campaign %s: %s", detail_url, e)
+        logger.error("Failed to save campaign %s after retries: %s", detail_url, e)
         return {"campaign_id": None, "success": False, "error": str(e)}
 
 
@@ -44,7 +45,7 @@ def save_crawl_log_to_db(
     campaign_id: int | None = None,
     error_message: str | None = None,
 ) -> dict:
-    """Save a crawl log entry to DB.
+    """Save a crawl log entry to DB (with retry: max 3).
 
     Returns:
         dict with 'log_id' and 'success' keys.
@@ -64,8 +65,8 @@ def save_crawl_log_to_db(
             "campaign_id": campaign_id,
             "error_message": error_message,
         }
-        log_id = insert_crawl_log(log_data)
+        log_id = retry_sync(insert_crawl_log, log_data)
         return {"log_id": log_id, "success": True}
     except Exception as e:
-        logger.error("Failed to save crawl log for %s: %s", url, e)
+        logger.error("Failed to save crawl log for %s after retries: %s", url, e)
         return {"log_id": None, "success": False, "error": str(e)}

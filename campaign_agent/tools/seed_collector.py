@@ -5,6 +5,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from campaign_agent.retry import retry_async, retry_sync
+
 logger = logging.getLogger(__name__)
 
 EXCLUDE_PATTERNS = [
@@ -115,10 +117,14 @@ def collect_seed_urls(seed_url: str) -> dict:
         dict with 'urls' (list of candidate URLs) and 'error' (if any).
     """
     try:
-        resp = requests.get(seed_url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
+        def _fetch():
+            resp = requests.get(seed_url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            return resp
+
+        resp = retry_sync(_fetch)
     except requests.RequestException as e:
-        logger.error("Failed to fetch seed URL %s: %s", seed_url, e)
+        logger.error("Failed to fetch seed URL %s after retries: %s", seed_url, e)
         return {"urls": [], "error": str(e)}
 
     urls = _extract_urls_from_html(resp.text, seed_url)
@@ -135,13 +141,16 @@ async def collect_seed_urls_async(seed_url: str) -> dict:
     Returns:
         dict with 'urls' and 'error'.
     """
-    # --- static attempt ---
+    # --- static attempt (with retry: max 3) ---
     try:
-        resp = requests.get(seed_url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        static_html = resp.text
-    except requests.RequestException as e:
-        logger.error("Failed to fetch seed URL %s: %s", seed_url, e)
+        async def _static_fetch():
+            resp = requests.get(seed_url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            return resp.text
+
+        static_html = await retry_async(_static_fetch)
+    except Exception as e:
+        logger.error("Failed to fetch seed URL %s after retries: %s", seed_url, e)
         static_html = None
 
     if static_html is not None:
@@ -157,18 +166,21 @@ async def collect_seed_urls_async(seed_url: str) -> dict:
             seed_url,
         )
 
-    # --- Playwright fallback ---
+    # --- Playwright fallback (with retry: max 3) ---
     try:
         from campaign_agent.tools.browser import fetch_page_html
 
-        rendered_html = await fetch_page_html(seed_url)
+        async def _playwright_fetch():
+            return await fetch_page_html(seed_url)
+
+        rendered_html = await retry_async(_playwright_fetch)
         urls = _extract_urls_from_html(rendered_html, seed_url)
         logger.info(
             "Collected %d candidate URLs from %s (Playwright)", len(urls), seed_url
         )
         return {"urls": urls, "error": None}
     except Exception as e:
-        logger.error("Playwright fallback failed for %s: %s", seed_url, e)
+        logger.error("Playwright fallback failed for %s after retries: %s", seed_url, e)
         # If we had partial static results, return those
         if static_html is not None:
             partial = _extract_urls_from_html(static_html, seed_url)

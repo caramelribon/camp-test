@@ -16,3 +16,7 @@ DB_CONFIG = {
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 MODEL_ID = os.getenv("MODEL_ID", "gemini-2.5-flash")
 VALIDATOR_MODEL_ID = os.getenv("VALIDATOR_MODEL_ID", "gemini-2.5-flash-lite")
+
+# Retry settings
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+RETRY_BACKOFF_BASE = float(os.getenv("RETRY_BACKOFF_BASE", "1.0"))
